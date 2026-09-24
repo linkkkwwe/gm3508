@@ -50,6 +50,20 @@
    和**低频爬行**（位置本身一顿一顿，查积分项/摩擦）。看截图缩小图容易只看到前者，
    放大图才能看到后者。诊断时先问用户"是一顿一顿还是高频发麻"。
 
+## Git / 仓库
+- 远端：**`git@github.com:linkkkwwe/gm3508.git`**（Public）——https://github.com/linkkkwwe/gm3508
+  分支 `main`，2026-09-17 首推，提交 `82ebb76`「3508未调参」，1480 文件 / 53.4 MB。
+- **兄弟项目 `D:\mxproject\Guide_rail`**（远端 `guide_rail`）是同一硬件的另一份平行演进拷贝：
+  那边用 vofa.c + simulation/*.m，这边用 trajectory.c + serialplot.c；两边 `pid.c` 完全相同。
+  两边路径冲突（都占 `Core/`、`Drivers/`、`application/`），**不能合到同一条分支**。
+- `.gitignore` 沿用 Guide_rail 那份（忽略 `*.o/*.d/*.crf/*.axf/*.hex/*.map`、`MDK-ARM/GUID_RAIL/`、
+  `MDK-ARM/RTE/`、`DebugConfig/`），保留 `.uvprojx/.uvoptx/.scvd/startup_stm32f407xx.s`。
+  重写前那份历史留在 `backup-before-clean` 分支 + `pre-clean-20260917` 标签（原提交 `df7c9c3`）。
+- **本机没有 `gh` CLI 也没有 token** → 建远端仓库必须让用户自己在 github.com/new 建（空仓库）。
+  SSH key `~/.ssh/id_ed25519`（注释 `guide_rail`）可直连 GitHub，账号 `linkkkwwe`。
+- 已知怪学号：本机 `git push -u` / `git fetch` 报成功但 `refs/remotes/origin/main` 不落盘，
+  要靠 `git rev-parse refs/remotes/origin/main` + `git ls-tree -r` 复核，别只信 push 的输出。
+
 ## 对象常数（2026-09-17 由实测波形反推，可直接复用）
 - **Kt/J = 2.39 (°/s²) 每 1 个电流指令单位**（由 Kp=500 时 5.5 Hz 等幅振铃反推：
   Kt/J = (2πf)²/Kp）。有了它就能纯计算预测带宽/阻尼，不用反复试。

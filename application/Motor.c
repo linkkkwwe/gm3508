@@ -5,7 +5,7 @@
 #define ECD_HALF_RANGE  4096              /* 半圈阈值：ecd 跳变超过它即判定过零 */
 #define DEG_PER_ECD     (360.0f / 8192.0f) /* 每计数对应的角度 */
 #define M3508_GEAR_RATIO   19.2032  /* 3591/187，转子转19.2圈=输出轴1圈 */
-
+//#define M3508_GEAR_RATIO   1.0
 /* ============ 水平电机 PID 调参变量（Keil Debug 实时修改） ============
  * 在 Debug 模式的 Watch 窗口里输入变量名即可查看和修改，
  * 修改后下一帧控制立即生效，无需重新编译烧录。
@@ -16,6 +16,10 @@ fp32 g_horizontal_ki      =   0.0f;
 fp32 g_horizontal_kd      = 1700.0f;
 fp32 g_horizontal_max_out = 16384.0f;
 fp32 g_horizontal_max_iout =5000.0f;
+
+/* 摩擦前馈：幅值默认 0（关闭），在 Keil Watch 里往上加来标定 */
+volatile fp32 g_horizontal_ff_gain = 0.0f;
+volatile fp32 g_horizontal_ff      = 0.0f;
 
 /* 观测变量：每帧更新，Keil Debug Watch / Logic Analyzer 直接看
  * 加 volatile 防止编译器优化掉（否则 Debug 里报"未知信号"） */
@@ -126,6 +130,12 @@ int16_t motor_ctrl_update(motor_ctrl_t *motor, fp32 target_angle,
     /* 单环：角度环输出直接当电流 */
     voltage = Pid_calc(&motor->pid_angle,
                        motor->current_angle, target_angle);
+
+    /* 摩擦前馈：低速爬行是静摩擦造成的，PID 自己冲不破，这里补一个方向偏置。
+     * 只有 rail_control 在手动档低速运动时会给非零值，其他模式恒为 0，
+     * 所以不影响已经调好的波形参数。 */
+    voltage += g_horizontal_ff;
+    voltage = constrain_float(voltage, -g_horizontal_max_out, g_horizontal_max_out);
 
     (void)speed_rpm; /* 单环角度控制不用转速反馈，参数保留兼容 Guide_rail 接口 */
 

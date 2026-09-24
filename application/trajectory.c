@@ -3,8 +3,17 @@
 #include <math.h>
 
 #define PI_F                    3.1415926f
-#define TRAJECTORY_AMPLITUDE   720.0f   /* 摆幅 ±30°，对应 Motor.h 中的角度限位 */
-#define TRAJECTORY_PERIOD_MS   2000U   /* 一个完整周期 = 6 秒 */
+
+/* 摆幅（输出轴角度，度）。⚠️ 占位值，必须按实际传动比换算：
+ * Motor.c 里 current_angle 已除过 gear_ratio(19.2)，所以这里单位是输出轴角度。
+ * 量法：让电机转 360°，量滑块走多少 mm → 得 mm/度；再按目标半行程反算。
+ * 暂用 180°（= 半圈输出轴），比原值 500° 保守得多——机构未知时先用小行程
+ * 确认方向和对齐，再逐级放大。 */
+#define TRAJECTORY_AMPLITUDE   720.0f
+
+/* 一个完整周期（ms）。原值是 1U，会让 `elapsed_ms % 1U` 恒等于 0 →
+ * 相位永远是 0 → 两个波形都恒输出 0.0f，看起来像"停在 0°"而不是在走波形。 */
+#define TRAJECTORY_PERIOD_MS   2000U
 
 /*
  * 轨迹生成器：给定"从模式启动到现在经过的时间"，返回一个目标角度。

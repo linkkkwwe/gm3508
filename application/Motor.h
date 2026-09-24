@@ -20,6 +20,18 @@ extern fp32 g_horizontal_kd;       /* 微分增益：抑制超调，太大会嗡
 extern fp32 g_horizontal_max_out;  /* 输出限幅：M3508 最大 ±16384，先从小的试 */
 extern fp32 g_horizontal_max_iout; /* 积分限幅：Ki=0 时无效 */
 
+/* ===== 摩擦前馈 =====
+ * 低速顿挫（爬行）是静摩擦造成的：PD 输出过不了静摩擦就卡住，误差攒够了一跳，
+ * 跳动后误差塌掉又被抓住 —— 循环往复。这是机械特性，调 PID 治不了根。
+ * 这里按运动方向补一个固定偏置电流，直接跨过静摩擦死区。
+ *
+ * g_horizontal_ff_gain  标定幅值（Keil Watch 里从 0 往上加，加到低速不顿为止，
+ *                       典型几百到一千多）；0 = 关闭，不加任何影响。
+ * g_horizontal_ff       带符号的当前值，由 rail_control 按模式/方向写入，
+ *                       只有手动档低速运动时非零，波形/归位/SAFE 恒为 0。 */
+extern volatile fp32 g_horizontal_ff_gain;
+extern volatile fp32 g_horizontal_ff;
+
 /* ===== 调参观测变量（Keil Debug Watch / Logic Analyzer 直接看） =====
  * 每帧控制后更新，实时反映电机运行状态，方便边看边调。
  * 加 volatile 防止编译器优化掉（否则 Debug 里会报"未知信号"）。 */
@@ -29,7 +41,7 @@ extern volatile fp32    g_dbg_target_angle;    /**< 目标角度（输出轴，�
 extern volatile int16_t g_dbg_pid_output;      /**< PID 输出电流（±16384），发给 CAN */
 
 /* ===== 角度限位（相对上电位置） =====
- * 水平轴：±60° 限位，靠 constrain_float 限制目标角度。 */
+ * 水平轴：±720° 限位，靠 constrain_float 限制目标角度。 */
 #define HORIZONTAL_MIN_ANGLE_DEG   (-720.0f)
 #define HORIZONTAL_MAX_ANGLE_DEG     720.0f
 

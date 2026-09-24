@@ -666,6 +666,11 @@
               <FileType>1</FileType>
               <FilePath>..\application\serialplot.c</FilePath>
             </File>
+            <File>
+              <FileName>rail_control.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>..\application\rail_control.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

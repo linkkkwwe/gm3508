@@ -14,7 +14,7 @@
  */
 
 #define C620_COMMAND_ID        0x200U            /* C620 控制帧（管 ID 1~4） */
-#define HORIZONTAL_ESC_ID       4U               /* 水平电调拨码 ID（C620/M3508，当前电调实测=4） */
+#define HORIZONTAL_ESC_ID       1U               /* 水平电调拨码 ID（C620/M3508，当前电调实测=4） */
 #define CAN_HORIZONTAL_FEEDBACK_ID (0x200U + HORIZONTAL_ESC_ID) /* = 0x204 */
 
 /* 电机索引：与 motor_measure[] 数组下标对应（本工程只有一个电机） */

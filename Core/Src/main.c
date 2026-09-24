@@ -30,6 +30,7 @@
 #include "Motor.h"
 #include "trajectory.h"
 #include "serialplot.h"
+#include "rail_control.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -39,8 +40,6 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-/* 上电轨迹模式：TRAJ_SINE=正弦（平滑不顿挫）/ TRAJ_TRIANGLE=三角波（匀速扫） */
-#define HORIZONTAL_START_MODE   TRAJ_SINE
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -57,6 +56,9 @@ static uint8_t control_started;
 /* TIM6 每 1ms 置 1，主循环看到它才执行一轮控制（volatile：中断里写） */
 static volatile uint8_t control_tick_flag;
 static uint16_t plot_divider;   /* SerialPlot 输出分频：每 10ms 发一次 */
+
+/* 板A 帧接收：USART1 RX(PB7) 逐字节中断。这个口已经配好，不需要改 CubeMX */
+static uint8_t rail_rx_byte;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -102,12 +104,21 @@ int main(void)
   MX_CAN1_Init();
   MX_TIM6_Init();
   MX_USART1_UART_Init();
+  MX_CAN2_Init();
   /* USER CODE BEGIN 2 */
+  /* 第一件事就把串口接收挂上。
+   * MX_USART1_UART_Init() 之后串口就使能接收了，但执行到这里之前还会跑
+   * can_comm_init 等一堆初始化。这段窗口里如果有人往 RX 发字节，没人读 DR
+   * 就会置 ORE；ORE 会让 HAL 关掉 RXNE 中断并停止接收，之后再也不会有
+   * RxCplt 回调 —— 现象就是"上电老是连不上，要重新复位"。 */
+  HAL_UART_Receive_IT(&huart1, &rail_rx_byte, 1);
+
   if (can_comm_init() != HAL_OK)
     Error_Handler();
 
   motor_ctrl_init(&horizontal_motor, MOTOR_AXIS_HORIZONTAL);
   trajectory_init();
+  rail_control_init();          /* 上电进 SAFE：等板A 的帧才开始动 */
   control_started = 0U;
   control_tick_flag = 0U;
   plot_divider = 0U;
@@ -135,6 +146,7 @@ int main(void)
       {
         motor_ctrl_clear(&horizontal_motor);
         trajectory_init();
+        rail_control_init();        /* 回到 SAFE，等新帧重新决定模式 */
         control_started = 0U;
       }
       continue;
@@ -145,21 +157,21 @@ int main(void)
       motor_ctrl_update(&horizontal_motor, 0.0f,
                         motor_measure[HORIZONTAL_MOTOR].ecd,
                         motor_measure[HORIZONTAL_MOTOR].speed_rpm);
-      trajectory_set_horizontal_mode(HORIZONTAL_START_MODE);
       control_started = 1U;
       CAN_cmd_horizontal(0);
       continue;
     }
 
     {
+      /* 目标角度由 rail_control 状态机产出（波形/手动/归位/安全） */
       int16_t hori_v = motor_ctrl_update(&horizontal_motor,        /* 主要循环控制 */
-                                         trajectory_get_horizontal(),
+                                         rail_control_update(horizontal_motor.current_angle),
                                          motor_measure[HORIZONTAL_MOTOR].ecd,
                                          motor_measure[HORIZONTAL_MOTOR].speed_rpm);
       CAN_cmd_horizontal(hori_v);
     }
 
-    /* SerialPlot 输出：每 10ms 发一次，避免高频串口阻塞控制周期 */
+    /* SerialPlot 输出：每 10ms 发一次� �避免高频串口阻塞控制周期 */
     if (++plot_divider >= 10U)
     {
       plot_divider = 0U;
@@ -221,6 +233,31 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
   if (htim->Instance == TIM6)
     control_tick_flag = 1U;
+}
+
+/* 串口接收完成回调：逐字节交给 rail_control 组行，然后重新挂起接收。
+ * 这里只做搬运，解析和状态机都在主循环里跑（不在中断里做重活）。 */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    rail_control_rx_byte(rail_rx_byte);
+    HAL_UART_Receive_IT(&huart1, &rail_rx_byte, 1);
+  }
+}
+
+/* 串口错误回调：ORE/FE/NE/PE 任意一个出现，HAL 都会调 UART_EndRxTransfer()
+ * 把 RXNE 中断关掉、接收停掉。不在回调里恢复的话，一次噪声或溢出就会让
+ * 接收永久失效，只能复位 —— 这正是"上电连不上"的根因。
+ * 这里清掉错误标志并重新挂起接收，自动恢复。 */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance == USART1)
+  {
+    __HAL_UART_CLEAR_PEFLAG(huart);       /* 读 SR 再读 DR，清 PE/FE/NE/ORE */
+    huart->ErrorCode = HAL_UART_ERROR_NONE;
+    HAL_UART_Receive_IT(&huart1, &rail_rx_byte, 1);
+  }
 }
 /* USER CODE END 4 */
 

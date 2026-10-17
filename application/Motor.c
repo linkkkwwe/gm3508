@@ -21,6 +21,10 @@ fp32 g_horizontal_max_iout =5000.0f;
 volatile fp32 g_horizontal_ff_gain = 0.0f;
 volatile fp32 g_horizontal_ff      = 0.0f;
 
+/* 零点重设请求 / 限位关闭开关：由 rail_control 每帧写入，update() 里消费 */
+volatile uint8_t g_horizontal_rezero_req = 0U;
+volatile uint8_t g_horizontal_limit_off  = 0U;
+
 /* 观测变量：每帧更新，Keil Debug Watch / Logic Analyzer 直接看
  * 加 volatile 防止编译器优化掉（否则 Debug 里报"未知信号"） */
 volatile int16_t g_dbg_speed_rpm     = 0;
@@ -107,6 +111,26 @@ int16_t motor_ctrl_update(motor_ctrl_t *motor, fp32 target_angle,
         return 0;
     }
 
+    /* 零点重设：把"当前这一帧的编码器位置"记为新的 0° 参考。
+     * 物理位置一点没动，只是把坐标系平移过去，所以电机不会跳。
+     * 请求方（rail_control）负责把自己的目标角度同步归零。
+     * 重设帧不输出电流，让 PID 从干净的误差状态重新开始。
+     * ⚠️ 当前 rail_control 已不再置位 g_horizontal_rezero_req（零点固定为
+     *    上电位置），这段保留备用；真跑到这里只可能是外部调试手动置位。 */
+    if (g_horizontal_rezero_req)
+    {
+        g_horizontal_rezero_req = 0U;
+        motor->offset_ecd = ecd;
+        motor->last_ecd = ecd;
+        motor->total_rounds = 0;
+        motor->current_angle = 0.0f;
+        Pid_clear(&motor->pid_angle);
+
+        g_dbg_current_angle = 0.0f;
+        g_dbg_pid_output    = 0;
+        return 0;
+    }
+
     /* 过零处理：ecd 是 0~8191 的环形量，跨过 8191↔0 时差值会
      * 突变成 ±8000 量级。差值 > 半圈(4096) 说明反向跨零 → 圈数-1；
      * 差值 < -4096 说明正向跨零 → 圈数+1。用 total_rounds 记录圈数，
@@ -124,8 +148,15 @@ int16_t motor_ctrl_update(motor_ctrl_t *motor, fp32 target_angle,
                    (int32_t)ecd - (int32_t)motor->offset_ecd;
     motor->current_angle = relative_ecd * DEG_PER_ECD / motor->gear_ratio;
 
-    /* 目标角度限幅，防止轨迹超出机械行程 */
-    target_angle = constrain_float(target_angle, motor->min_angle, motor->max_angle);
+    /* 目标角度限幅，防止轨迹超出机械行程。夹的是目标角度，不是实际角度。
+     * g_horizontal_limit_off = 1 可整体跳过夹紧（撞机械端点不会自停），
+     * 当前 rail_control 恒写 0，手动档也夹在 ±1080°。
+     * 注意手动档还要在 rail_control.c 里同步夹 manual_target，
+     * 否则累加器虚涨，往回推会有空行程。 */
+    if (!g_horizontal_limit_off)
+    {
+        target_angle = constrain_float(target_angle, motor->min_angle, motor->max_angle);
+    }
 
     /* 单环：角度环输出直接当电流 */
     voltage = Pid_calc(&motor->pid_angle,

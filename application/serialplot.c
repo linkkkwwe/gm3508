@@ -19,5 +19,5 @@ void serialplot_output(void)
                    (int)g_dbg_pid_output);
 
     if (len > 0)
-        HAL_UART_Transmit(&huart1, (uint8_t *)buf, (uint16_t)len, 10);
+        HAL_UART_Transmit(&huart6, (uint8_t *)buf, (uint16_t)len, 10);
 }

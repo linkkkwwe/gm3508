@@ -32,6 +32,24 @@ extern fp32 g_horizontal_max_iout; /* 积分限幅：Ki=0 时无效 */
 extern volatile fp32 g_horizontal_ff_gain;
 extern volatile fp32 g_horizontal_ff;
 
+/* ===== 零点重设 / 限位开关 =====
+ * g_horizontal_rezero_req  置 1 后，motor_ctrl_update() 在下一帧把"当前编码器
+ *                           位置"记为新的 0° 参考。物理位置不动，只是把坐标系
+ *                           平移过去，所以电机不会跳。
+ *                           ⚠️ 请求方必须同时把自己持有的目标角度归零，否则
+ *                           误差会突然变成"旧目标"那么大，电机会猛冲回去。
+ *                           ⚠️ 当前 rail_control 已不再置位（零点固定为上电位置），
+ *                           这段逻辑保留备用，别当成还在生效的功能。
+ *                           典型用法：手动档摇杆回中停下时，把停下的位置设成原点。
+ * g_horizontal_limit_off    1 = 跳过目标角度的限位夹紧（当前恒为 0，全模式都夹）；
+ *                           0 = 按 min_angle/max_angle 夹紧（默认）。
+ *                           ⚠️ 置 1 期间软件限位完全失效，撞到机械端点不会自己停。
+ *                           注意：光靠这里夹还不够——手动档的 manual_target 是
+ *                           rail_control 内部的累加器，那边也要同步夹紧，否则
+ *                           顶到限位后累加器继续虚涨，往回推会有一段空行程。 */
+extern volatile uint8_t g_horizontal_rezero_req;
+extern volatile uint8_t g_horizontal_limit_off;
+
 /* ===== 调参观测变量（Keil Debug Watch / Logic Analyzer 直接看） =====
  * 每帧控制后更新，实时反映电机运行状态，方便边看边调。
  * 加 volatile 防止编译器优化掉（否则 Debug 里会报"未知信号"）。 */
@@ -41,9 +59,15 @@ extern volatile fp32    g_dbg_target_angle;    /**< 目标角度（输出轴，�
 extern volatile int16_t g_dbg_pid_output;      /**< PID 输出电流（±16384），发给 CAN */
 
 /* ===== 角度限位（相对上电位置） =====
- * 水平轴：±720° 限位，靠 constrain_float 限制目标角度。 */
-#define HORIZONTAL_MIN_ANGLE_DEG   (-720.0f)
-#define HORIZONTAL_MAX_ANGLE_DEG     720.0f
+ * 水平轴：±1080° 限位，靠 constrain_float 限制目标角度（Motor.c 里夹的是
+ * 目标角度，不是实际角度）。
+ * ⚠️ 改数值就把这行注释一起改，别留下过期说明误导排查。
+ * ✅ 这是绝对行程保护：零点固定为上电位置，rail_control 已不再请求重设零点，
+ *    所以 ±1080 的起点不会平移。
+ * ⚠️ 唯一例外：反馈掉线触发 motor_ctrl_clear() 时，零点会重设为重连那一刻的
+ *    位置（offset_ecd 重取、total_rounds 清零）。要连这个也固定掉得另改。 */
+#define HORIZONTAL_MIN_ANGLE_DEG   (-1080.0f)
+#define HORIZONTAL_MAX_ANGLE_DEG     1080.0f
 
 /* 轴类型：motor_ctrl_init 用它选择对应轴的 PID 参数与限位
  * （本工程只有水平轴，保留枚举形式与 Guide_rail 工程接口一致） */

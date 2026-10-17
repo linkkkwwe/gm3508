@@ -105,6 +105,7 @@ int main(void)
   MX_TIM6_Init();
   MX_USART1_UART_Init();
   MX_CAN2_Init();
+  MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
   /* 第一件事就把串口接收挂上。
    * MX_USART1_UART_Init() 之后串口就使能接收了，但执行到这里之前还会跑

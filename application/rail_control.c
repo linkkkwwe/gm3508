@@ -5,25 +5,29 @@
 
 /* ==================== 可调参数（占位值，实车按实际行程改） ==================== */
 
-/* 软限位：手动模式下目标角度的绝对上限（度，相对上电位置）。
- * ⚠️ 必须严格小于 Motor.h 的 HORIZONTAL_MAX_ANGLE_DEG：
- *    motor_ctrl_update() 会把目标夹紧到那个值，如果这里设得比它大，
- *    manual_target 会一直涨而位置被夹住 → 目标"卷绕"，
- *    表现为推杆到端点后反向推半天没反应。所以这里直接按它推导。 */
-#define RAIL_LIMIT_DEG          (HORIZONTAL_MAX_ANGLE_DEG * 0.85f)
+/* 零点固定 = 上电位置，全程不再平移。
+ * 摇杆回中**不会**重设零点了（原先每停一次就把当前位置设成 0°，
+ * 结果 ±1080 限位跟着一起平移，等于没有绝对行程保护）。
+ * 现在 0° 就是上电那一刻的编码器位置，限位是真正的绝对行程限位。 */
+
+/* 手动档也走限位：目标角度累加到 ±1080° 就夹住，撞不到机械端点。
+ * 这里除了依赖 Motor.c 的夹紧，还要**在本文件里同时夹住 manual_target**
+ * ——manual_target 是本地累加器，如果只靠 Motor.c 夹，累加器会一路涨到
+ * 几千度，用户往回推时要先把虚高的数字降回来，手感就是"反向一段空行程"。 */
+
+/* 摇杆死区：|stick| 不超过这个值，目标完全不动（前馈也归零）。
+ * 遥控器 ADC 中位有几个 count 的噪声，必须留死区，否则松开摇杆电机也会慢慢爬。
+ * 摇杆中位噪声大、松开还在动，就把这个值往上加。 */
+#define RAIL_STICK_DEADZONE      30
 
 /* 摇杆满推（±1000）对应的移动速度（度/秒）。
- * 参考：正弦/三角波跑的是 720°/s 量级。这个值太小的话手动档会明显
+ * 参考：三角波匀速段现在是 1200°/s（900°/3s），正弦峰值 1885°/s。这个值太小的话手动档会明显
  * "又慢又软"——低速落在静摩擦主导区，没动量，走一下卡一下。
  * 想和波形一样快就设 700 左右；想留点精细控制余量设 300~500。 */
-#define RAIL_STICK_SEN          550.0f
+#define RAIL_STICK_SEN          700.0f
 
 /* 归位速度（度/秒）：从当前位置平滑走回 0° 的速度 */
-#define RAIL_HOMING_SPEED        200.0f
-
-/* 减速带：朝限位方向运动时，目标超过限位的这个比例后速度线性衰减到 0，
- * 避免全速冲到端点再硬夹断（有惯性会冲过）。反向离开不受影响。 */
-#define RAIL_SLOWDOWN_FRAC        0.85f
+#define RAIL_HOMING_SPEED        300.0f
 
 /* 链路超时（ms）：超过这个时间没收到合法帧 → SAFE。
  * 取 200ms 而不是 100ms，因为无线链路会偶发抖动，阈值太小会误停。 */
@@ -153,12 +157,19 @@ void rail_control_rx_byte(uint8_t byte)
         if (rx_len > 0U && !line_ready)
             line_ready = 1U;          /* 有内容才算一行 */
     }
-    else if (!line_ready && rx_len < RAIL_RX_BUF_SIZE - 1U)
+    else if (!line_ready)
     {
+        /* 缓冲满：回卷覆盖，让缓冲里放的始终是"最近"的字节。
+         * 原来的写法是满了就丢弃新字节，缓冲会一直钉在最早的 23 个字节上，
+         * 此后即使收到完整帧也进不来，只能等某个 \r\n 触发一次失败解析才腾空。
+         * 注意：这条只是健壮性改进，帧末尾的 \r\n 仍能自愈，
+         * 单靠它治不了链路断连。 */
+        if (rx_len >= RAIL_RX_BUF_SIZE - 1U)
+            rx_len = 0U;
         rx_buf[rx_len] = byte;
         rx_len++;
     }
-    /* 上一行还没处理或缓冲满：多余字节丢弃 */
+    /* 上一行还没处理：多余字节丢弃 */
 
     g_dbg_rc_ready = line_ready;
 }
@@ -245,36 +256,35 @@ static fp32 manual_step(fp32 current_angle)
         manual_fresh = 0U;
     }
 
+    /* 摇杆死区：中位就完全不动。
+     * ⚠️ 这里必须"真的归零"而不只是"判定停下"——零点已固定为上电位置、
+     *    不再重设，如果死区内还按摇杆原始值累加，遥控器 ADC 中位那几个
+     *    count 的噪声会让 manual_target 一直漂，电机就慢慢爬走。
+     *    顺带前馈也归零，否则摩擦补偿会顶着不动的地方继续推。 */
+    if ((stick_input <= RAIL_STICK_DEADZONE) && (stick_input >= -RAIL_STICK_DEADZONE))
+    {
+        g_horizontal_ff = 0.0f;
+        return manual_target;
+    }
+
     step = ((fp32)stick_input / 1000.0f) * RAIL_STICK_SEN * 0.001f;
 
-    /* 减速带：只在朝限位方向运动时衰减，反向离开不限制 */
-    if (step > 0.0f && manual_target > RAIL_LIMIT_DEG * RAIL_SLOWDOWN_FRAC)
-    {
-        step *= (RAIL_LIMIT_DEG - manual_target) /
-                (RAIL_LIMIT_DEG * (1.0f - RAIL_SLOWDOWN_FRAC));
-    }
-    else if (step < 0.0f && manual_target < -RAIL_LIMIT_DEG * RAIL_SLOWDOWN_FRAC)
-    {
-        step *= (RAIL_LIMIT_DEG + manual_target) /
-                (RAIL_LIMIT_DEG * (1.0f - RAIL_SLOWDOWN_FRAC));
-    }
-
     /* 摩擦前馈：按目标运动方向给一个固定偏置电流，跨过静摩擦死区，
-     * 治低速爬行。step 被减速带压到 0 时前馈也归零，不会顶着限位推。 */
+     * 治低速爬行。能走到这里说明不在死区内，step 必不为 0。 */
     if (step > 0.0f)
         g_horizontal_ff = g_horizontal_ff_gain;
-    else if (step < 0.0f)
-        g_horizontal_ff = -g_horizontal_ff_gain;
     else
-        g_horizontal_ff = 0.0f;
+        g_horizontal_ff = -g_horizontal_ff_gain;
 
     manual_target += step;
 
-    /* 硬停线：目标本身夹紧 */
-    if (manual_target > RAIL_LIMIT_DEG)
-        manual_target = RAIL_LIMIT_DEG;
-    if (manual_target < -RAIL_LIMIT_DEG)
-        manual_target = -RAIL_LIMIT_DEG;
+    /* 本地累加器也要夹到 ±1080，不能只靠 Motor.c 夹目标角度。
+     * 否则顶到限位后累加器还在虚涨，往回推要先降掉这段虚高值，
+     * 表现出来就是反向时的"空行程"。 */
+    if (manual_target > HORIZONTAL_MAX_ANGLE_DEG)
+        manual_target = HORIZONTAL_MAX_ANGLE_DEG;
+    else if (manual_target < HORIZONTAL_MIN_ANGLE_DEG)
+        manual_target = HORIZONTAL_MIN_ANGLE_DEG;
 
     return manual_target;
 }
@@ -330,6 +340,10 @@ fp32 rail_control_update(fp32 current_angle)
     {
         mode = RAIL_SAFE;
     }
+
+    /* 全模式都开限位夹紧：手动档也夹在 ±1080°。
+     * 想临时完全放开（推到机械端点才停），把这里改成 1U 即可。 */
+    g_horizontal_limit_off = 0U;
 
     switch (mode)
     {
